@@ -1,0 +1,84 @@
+name: Auto Approve Deposits
+
+on:
+  schedule:
+    # Runs every 5 minutes
+    # Adjust '*/5' to your desired frequency (e.g., '0 * * * *' for once an hour)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    # Allows manual triggering of the workflow from GitHub Actions tab
+
+jobs:
+  auto_approve:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up PHP (if you need to run PHP locally for some reason, though curl is used for API calls)
+      # This step might not be strictly necessary if you're only using curl to hit your deployed API.
+      # Including it for completeness if you decide to run any PHP scripts locally within the action.
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.1' # Adjust to your PHP version
+        extensions: pdo_mysql
+
+    - name: Fetch Pending Deposits
+      id: fetch_deposits
+      env:
+        API_KEY: ${{ secrets.API_SECRET_KEY }}
+        GET_PENDING_API_URL: "http://your-domain.com/api/get_pending_deposits.php" # <-- CHANGE THIS URL
+      run: |
+        echo "Fetching pending deposits from ${GET_PENDING_API_URL}..."
+        response=$(curl -s -X GET \
+          -H "X-API-Key: ${API_KEY}" \
+          "${GET_PENDING_API_URL}")
+        
+        echo "API Response: $response"
+        
+        # Check if response is valid JSON and contains 'deposits'
+        if echo "$response" | jq -e '.success == true and .data.deposits != null' > /dev/null; then
+          deposits=$(echo "$response" | jq -c '.data.deposits')
+          echo "Found $(echo "$deposits" | jq 'length') pending deposits."
+          echo "DEPOSITS_JSON=$deposits" >> $GITHUB_ENV
+        else
+          echo "Error fetching deposits: $(echo "$response" | jq -r '.error // "Unknown error"') " >&2
+          exit 1
+        fi
+
+    - name: Approve Each Deposit
+      if: env.DEPOSITS_JSON != 'null' && env.DEPOSITS_JSON != '[]'
+      env:
+        API_KEY: ${{ secrets.API_SECRET_KEY }}
+        APPROVE_API_URL: "http://your-domain.com/api/approve_deposit.php" # <-- CHANGE THIS URL
+      run: |
+        echo "Starting approval process..."
+        deposits_array=$(echo "${{ env.DEPOSITS_JSON }}" | jq -c '.[]')
+        
+        for deposit in $(echo "${{ env.DEPOSITS_JSON }}" | jq -c '.[]'); do
+          id=$(echo "$deposit" | jq -r '.id')
+          db_origin=$(echo "$deposit" | jq -r '.db_origin')
+          amount=$(echo "$deposit" | jq -r '.amount')
+          utr=$(echo "$deposit" | jq -r '.utr')
+          
+          echo "Attempting to approve Deposit ID: $id, DB: $db_origin, Amount: $amount, UTR: $utr"
+          
+          approve_response=$(curl -s -X POST \
+            -H "X-API-Key: ${API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"id\": ${id}, \"db_origin\": \"${db_origin}\"}" \
+            "${APPROVE_API_URL}")
+          
+          echo "Approval API Response for ID $id: $approve_response"
+          
+          if echo "$approve_response" | jq -e '.success == true' > /dev/null; then
+            echo "Successfully approved Deposit ID: $id"
+          else
+            error_message=$(echo "$approve_response" | jq -r '.error // "Unknown error"')
+            echo "Failed to approve Deposit ID: $id. Error: $error_message" >&2
+            # Optionally, you can exit here or continue to try other deposits
+            # exit 1 # Uncomment to fail the job if any approval fails
+          fi
+        done
+        echo "Approval process completed."
