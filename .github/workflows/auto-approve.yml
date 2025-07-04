@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs every 5 minutes
     # Adjust '*/5' to your desired frequency (e.g., '0 * * * *' for once an hour)
-    - cron: '*/5 * * * *'
+    - cron: '*/1 * * * *'
   workflow_dispatch:
     # Allows manual triggering of the workflow from GitHub Actions tab
 
